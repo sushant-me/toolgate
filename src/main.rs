@@ -1,14 +1,13 @@
 //! toolgate — audit an MCP server's tool declarations before an agent connects.
 //!
-//! Three checks, each for a defect that has been found in the wild:
+//! Three checks, each for a defect that has been found in the wild.
 //!
-//!   1. CONFUSABLE NAMES   two tools whose names normalise to the same string, so a
-//!                         policy written against one silently matches the other.
-//!   2. HIDDEN TEXT        instructions smuggled into a description using Unicode tag
-//!                         characters or zero-width characters — invisible when read,
-//!                         present in the model's context.
-//!   3. UNMARKED RISK      a tool whose name or description says it is destructive,
-//!                         with no `annotations.readOnlyHint` saying otherwise.
+//! 1. Confusable names — two tools whose names normalise to the same string, so a
+//!    policy written against one silently matches the other.
+//! 2. Hidden text — instructions smuggled into a description with Unicode tag or
+//!    zero-width characters: invisible when read, present in the model's context.
+//! 3. Unmarked risk — a tool whose name or description says it is destructive
+//!    with no `annotations.readOnlyHint` saying otherwise.
 //!
 //! Exit codes: 0 clean, 1 findings, 2 usage/input error. Fail-closed: an input it
 //! cannot parse is exit 2, never "clean".
@@ -25,17 +24,35 @@ fn skeleton(name: &str) -> String {
         .flat_map(|c| c.to_lowercase())
         .map(|c| match c {
             // Cyrillic look-alikes
-            'а' => 'a', 'е' => 'e', 'о' => 'o', 'р' => 'p', 'с' => 'c',
-            'у' => 'y', 'х' => 'x', 'і' => 'i', 'ѕ' => 's', 'ј' => 'j',
-            'ь' => 'b', 'н' => 'h', 'к' => 'k', 'м' => 'm', 'т' => 't',
+            'а' => 'a',
+            'е' => 'e',
+            'о' => 'o',
+            'р' => 'p',
+            'с' => 'c',
+            'у' => 'y',
+            'х' => 'x',
+            'і' => 'i',
+            'ѕ' => 's',
+            'ј' => 'j',
+            'ь' => 'b',
+            'н' => 'h',
+            'к' => 'k',
+            'м' => 'm',
+            'т' => 't',
             // Greek look-alikes
-            'ο' => 'o', 'α' => 'a', 'ρ' => 'p', 'ν' => 'v', 'κ' => 'k',
-            'τ' => 't', 'υ' => 'u', 'χ' => 'x', 'ι' => 'i',
+            'ο' => 'o',
+            'α' => 'a',
+            'ρ' => 'p',
+            'ν' => 'v',
+            'κ' => 'k',
+            'τ' => 't',
+            'υ' => 'u',
+            'χ' => 'x',
+            'ι' => 'i',
             other => other,
         })
         .collect()
 }
-
 
 /// True when the name contains a character from a script that disguises a Latin letter.
 fn has_lookalike(name: &str) -> bool {
@@ -57,13 +74,17 @@ fn is_hidden(c: char) -> bool {
         || u == 0xFEFF      // zero-width no-break space / BOM
         || u == 0x2060      // word joiner
         || (0xE0000..=0xE007F).contains(&u)   // Unicode tag block (the classic smuggle)
-        || (0x2061..=0x2064).contains(&u)     // invisible operators
+        || (0x2061..=0x2064).contains(&u) // invisible operators
 }
 
 // ------------------------------------------------------------------ checks
 
 #[derive(Debug, PartialEq)]
-enum Severity { Critical, High, Medium }
+enum Severity {
+    Critical,
+    High,
+    Medium,
+}
 
 #[derive(Debug)]
 struct Finding {
@@ -74,9 +95,9 @@ struct Finding {
 
 /// Words that indicate a tool can change or destroy state.
 const DESTRUCTIVE: &[&str] = &[
-    "delete", "remove", "drop", "destroy", "purge", "truncate", "wipe",
-    "write", "create", "update", "modify", "insert", "exec", "run", "shell",
-    "send", "transfer", "pay", "charge", "move", "rename", "kill", "reset",
+    "delete", "remove", "drop", "destroy", "purge", "truncate", "wipe", "write", "create",
+    "update", "modify", "insert", "exec", "run", "shell", "send", "transfer", "pay", "charge",
+    "move", "rename", "kill", "reset",
 ];
 
 fn audit(tools: &[serde_json::Value]) -> Vec<Finding> {
@@ -97,14 +118,22 @@ fn audit(tools: &[serde_json::Value]) -> Vec<Finding> {
                 // calling both Critical would make the tool useless on any normal codebase.
                 let disguised = has_lookalike(name) || has_lookalike(other_name);
                 out.push(Finding {
-                    severity: if disguised { Severity::Critical } else { Severity::Medium },
+                    severity: if disguised {
+                        Severity::Critical
+                    } else {
+                        Severity::Medium
+                    },
                     tool: name.to_string(),
                     what: format!(
                         "name is confusable with {:?}: both normalise to {:?} — a policy \
                          written against one will match the other{}",
                         other_name,
                         sk,
-                        if disguised { "" } else { " (naming style, not a look-alike)" }
+                        if disguised {
+                            ""
+                        } else {
+                            " (naming style, not a look-alike)"
+                        }
                     ),
                 });
             }
@@ -113,15 +142,21 @@ fn audit(tools: &[serde_json::Value]) -> Vec<Finding> {
     }
 
     for t in tools {
-        let name = t.get("name").and_then(|v| v.as_str()).unwrap_or("(unnamed)");
+        let name = t
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(unnamed)");
         let desc = t.get("description").and_then(|v| v.as_str()).unwrap_or("");
 
         // 2. hidden characters in name or description
         for (field, text) in [("name", name), ("description", desc)] {
             let hidden: Vec<char> = text.chars().filter(|c| is_hidden(*c)).collect();
             if !hidden.is_empty() {
-                let codes: Vec<String> =
-                    hidden.iter().take(4).map(|c| format!("U+{:04X}", *c as u32)).collect();
+                let codes: Vec<String> = hidden
+                    .iter()
+                    .take(4)
+                    .map(|c| format!("U+{:04X}", *c as u32))
+                    .collect();
                 out.push(Finding {
                     severity: Severity::Critical,
                     tool: name.to_string(),
@@ -139,7 +174,11 @@ fn audit(tools: &[serde_json::Value]) -> Vec<Finding> {
 
         // 3. destructive-sounding tool with no readOnlyHint
         let lower = format!("{} {}", name.to_lowercase(), desc.to_lowercase());
-        let risky: Vec<&str> = DESTRUCTIVE.iter().copied().filter(|w| lower.contains(w)).collect();
+        let risky: Vec<&str> = DESTRUCTIVE
+            .iter()
+            .copied()
+            .filter(|w| lower.contains(w))
+            .collect();
         let has_hint = t
             .get("annotations")
             .and_then(|a| a.get("readOnlyHint"))
@@ -201,7 +240,10 @@ fn main() -> ExitCode {
     };
 
     let findings = audit(&tools);
-    println!("toolgate — {} tool declaration(s) read from {path}", tools.len());
+    println!(
+        "toolgate — {} tool declaration(s) read from {path}",
+        tools.len()
+    );
     if findings.is_empty() {
         println!("  no findings.\n  This says nothing about behaviour at runtime — only that");
         println!("  these declarations contain no confusable name, no hidden character,");
